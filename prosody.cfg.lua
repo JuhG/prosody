@@ -87,8 +87,6 @@ http_external_url = "https://prosody.fly.dev/"
 http_ports = { 5280 }
 https_ports = {}  -- Fly terminates TLS for us
 http_interfaces = { "0.0.0.0" }
-cross_domain_websocket = true
-cross_domain_bosh = true
 
 -- Virtual host configuration
 VirtualHost "prosody.fly.dev"
