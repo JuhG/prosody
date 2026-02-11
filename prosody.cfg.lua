@@ -83,7 +83,7 @@ limits = {
 }
 
 -- HTTP configuration
-http_external_url = "https://prosody-bold-frost-8418.fly.dev/"
+http_external_url = "https://prosody.fly.dev/"
 http_ports = { 5280 }
 https_ports = {}  -- Fly terminates TLS for us
 http_interfaces = { "0.0.0.0" }
@@ -91,10 +91,10 @@ cross_domain_websocket = true
 cross_domain_bosh = true
 
 -- Virtual host configuration
-VirtualHost "prosody-bold-frost-8418.fly.dev"
+VirtualHost "prosody.fly.dev"
 
 -- MUC (Multi-User Chat) Configuration
-Component "conference.prosody-bold-frost-8418.fly.dev" "muc"
+Component "conference.prosody.fly.dev" "muc"
     name = "Messagely Chat Rooms"
     restrict_room_creation = false
     max_history_messages = 100
