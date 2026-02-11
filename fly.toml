@@ -1,37 +1,23 @@
-# fly.toml app configuration file generated for prosody on 2026-02-11T11:02:57+01:00
+# fly.toml app configuration file generated for prosody on 2026-02-11T11:08:59Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
 app = 'prosody'
-primary_region = 'ams'
+primary_region = 'iad'
 
 [build]
 
-# HTTP (WebSocket + BOSH + file upload) — Fly terminates TLS
 [http_service]
-  internal_port = 5280
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
 
-# XMPP client-to-server (direct TCP)
-[[services]]
-  internal_port = 5222
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 5222
-
-# Persistent storage for user data and MAM archives
-[mounts]
-  source = "prosody_data"
-  destination = "/var/lib/prosody"
-
 [[vm]]
-  memory = '256mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
+  memory_mb = 1024
