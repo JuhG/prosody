@@ -26,12 +26,12 @@ primary_region = 'ams'
     port = 5222
 
 # Persistent storage for user data and MAM archives
-[mounts]
+[[mounts]]
   source = "prosody_data"
   destination = "/var/lib/prosody"
 
 [[vm]]
-  memory = '256mb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
+  memory_mb = 512
