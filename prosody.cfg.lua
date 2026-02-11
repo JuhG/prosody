@@ -1,4 +1,4 @@
--- Prosody Configuration for local XMPP server with WebSocket and MAM
+-- Prosody Configuration for Fly.io XMPP server with WebSocket and MAM
 
 modules_enabled = {
     -- Core messaging
@@ -39,7 +39,6 @@ modules_enabled = {
     "watchregistrations"; -- Monitor new registrations
     "motd";             -- Message of the Day
     "legacyauth";       -- Legacy authentication support
-    "proxy65";          -- SOCKS5 Bytestreams (XEP-0065)
     "http";             -- HTTP server
     "http_files";       -- Serve static files
     "adhoc";            -- Ad-Hoc Commands (XEP-0050)
@@ -50,10 +49,15 @@ modules_enabled = {
 
 -- Authentication configuration
 authentication = "internal_plain"
-c2s_require_encryption = false
+c2s_require_encryption = false  -- Fly terminates TLS, internal traffic is plain
 s2s_require_encryption = false
 s2s_secure_auth = false
 allow_unencrypted_plain_auth = true
+
+-- Trust connections behind Fly's TLS proxy
+consider_bosh_secure = true
+consider_websocket_secure = true
+trusted_proxies = { "0.0.0.0/0" }
 
 -- MAM Configuration
 archive_expires_after = "never"
@@ -78,21 +82,19 @@ limits = {
     };
 }
 
--- SOCKS5 proxy for file transfers
-proxy65_address = "localhost"
-proxy65_ports = { 5000 }
-
--- HTTP configuration (global section)
-http_external_url = "http://localhost:5280/"
+-- HTTP configuration
+http_external_url = "https://prosody-bold-frost-8418.fly.dev/"
 http_ports = { 5280 }
-https_ports = {}  -- Disable HTTPS for local dev
+https_ports = {}  -- Fly terminates TLS for us
 http_interfaces = { "0.0.0.0" }
+cross_domain_websocket = true
+cross_domain_bosh = true
 
 -- Virtual host configuration
-VirtualHost "localhost"
+VirtualHost "prosody-bold-frost-8418.fly.dev"
 
 -- MUC (Multi-User Chat) Configuration
-Component "conference.localhost" "muc"
+Component "conference.prosody-bold-frost-8418.fly.dev" "muc"
     name = "Messagely Chat Rooms"
     restrict_room_creation = false
     max_history_messages = 100
