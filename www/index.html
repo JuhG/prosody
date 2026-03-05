@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sendily Test Server</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background: #111;
+        color: #fff;
+      }
+      .container {
+        text-align: center;
+        padding: 2rem;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin-bottom: 1.5rem;
+        font-weight: 500;
+        opacity: 0.9;
+      }
+      #qr {
+        display: inline-block;
+        padding: 1rem;
+        background: #fff;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+      }
+      #qr canvas {
+        display: block;
+      }
+      .info {
+        font-size: 0.85rem;
+        opacity: 0.5;
+        margin-bottom: 1.5rem;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Sendily</h1>
+      <div id="qr"></div>
+      <div class="info">username: user1</div>
+      <div class="info">password: password</div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script>
+      new QRCode(document.getElementById("qr"), {
+        text: "v1|wss://prosody.fly.dev/xmpp-websocket|user1|SM|en",
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+    </script>
+  </body>
+</html>

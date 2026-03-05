@@ -88,11 +88,17 @@ http_ports = { 5280 }
 https_ports = {}  -- Fly terminates TLS for us
 http_interfaces = { "0.0.0.0" }
 
+-- Serve landing page at root
+http_files_dir = "/var/www/prosody"
+http_paths = {
+    files = "/";
+}
+
 -- Virtual host configuration
 VirtualHost "prosody.fly.dev"
 
 -- MUC (Multi-User Chat) Configuration
 Component "conference.prosody.fly.dev" "muc"
-    name = "Messagely Chat Rooms"
+    name = "Sendily Chat Rooms"
     restrict_room_creation = false
     max_history_messages = 100
