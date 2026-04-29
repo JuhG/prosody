@@ -45,6 +45,8 @@ modules_enabled = {
     "admin_adhoc";      -- Admin commands via Ad-Hoc
     "groups";           -- Shared roster groups
     "server_contact_info"; -- Contact info (XEP-0157)
+    "external_services";   -- STUN server discovery (XEP-0215)
+    "voip_push";           -- VoIP push for backgrounded iOS callee
 }
 
 -- Authentication configuration
@@ -92,6 +94,16 @@ http_interfaces = { "0.0.0.0" }
 http_files_dir = "/var/www/prosody"
 http_paths = {
     files = "/";
+}
+
+-- STUN server for VoIP call setup (XEP-0215)
+-- No TURN: if P2P fails, clients show an error
+external_services = {
+    {
+        type = "stun",
+        host = "stun.l.google.com",
+        port = 19302,
+    },
 }
 
 -- Virtual host configuration
