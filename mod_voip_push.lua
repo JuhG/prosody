@@ -91,7 +91,8 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 	});
 
 	local jwt = make_jwt();
-	local url = "https://api.push.apple.com/3/device/" .. device_token;
+	local apns_host = os.getenv("APNS_SANDBOX") and "api.sandbox.push.apple.com" or "api.push.apple.com";
+	local url = "https://" .. apns_host .. "/3/device/" .. device_token;
 
 	local cmd = string.format(
 		"curl -s -w '\\n%%{http_code}' --http2 -X POST"
