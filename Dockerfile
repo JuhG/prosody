@@ -7,7 +7,7 @@ RUN sed -i \
       /etc/apt/sources.list && \
     sed -i '/buster-updates/d' /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
-      luarocks libssl-dev build-essential m4 liblua5.2-dev && \
+      luarocks libssl-dev build-essential m4 liblua5.2-dev curl && \
     export C_INCLUDE_PATH=/usr/include/lua5.2 && \
     luarocks install luaossl LUA_INCDIR=/usr/include/lua5.2 && \
     luarocks install http LUA_INCDIR=/usr/include/lua5.2 && \

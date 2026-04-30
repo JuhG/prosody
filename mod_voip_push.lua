@@ -6,10 +6,9 @@ local b64       = encodings.base64;
 
 local ok_pkey,   pkey           = pcall(require, "openssl.pkey");
 local ok_digest, openssl_digest = pcall(require, "openssl.digest");
-local ok_http,   http_request   = pcall(require, "http.request");
 
-if not (ok_pkey and ok_digest and ok_http) then
-	module:log("error", "mod_voip_push requires luaossl and lua-http — install via luarocks");
+if not (ok_pkey and ok_digest) then
+	module:log("error", "mod_voip_push requires luaossl — install via luarocks");
 	return;
 end
 
@@ -78,8 +77,12 @@ local function make_jwt()
 	return jwt_cache;
 end
 
+local function shell_escape(s)
+	return "'" .. s:gsub("'", "'\\''") .. "'";
+end
+
 local function send_push(device_token, call_id, caller_jid, caller_name)
-	local body = json.encode({
+	local payload = json.encode({
 		aps      = {},
 		callType = "xmpp",
 		callId   = call_id,
@@ -87,29 +90,30 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 		peerName = caller_name,
 	});
 
-	local req = http_request.new_from_uri(
-		"https://api.push.apple.com/3/device/" .. device_token
+	local jwt = make_jwt();
+	local url = "https://api.push.apple.com/3/device/" .. device_token;
+
+	local cmd = string.format(
+		"curl -s -w '\\n%%{http_code}' --http2 -X POST"
+		.. " -H 'authorization: bearer %s'"
+		.. " -H 'apns-topic: %s.voip'"
+		.. " -H 'apns-push-type: voip'"
+		.. " -H 'apns-expiration: 0'"
+		.. " -H 'apns-priority: 10'"
+		.. " -H 'content-type: application/json'"
+		.. " -d %s %s 2>&1",
+		jwt, APNS_BUNDLE_ID, shell_escape(payload), shell_escape(url)
 	);
-	req.headers:upsert(":method",         "POST");
-	req.headers:upsert("authorization",   "bearer " .. make_jwt());
-	req.headers:upsert("apns-topic",      APNS_BUNDLE_ID .. ".voip");
-	req.headers:upsert("apns-push-type",  "voip");
-	req.headers:upsert("apns-expiration", "0");
-	req.headers:upsert("apns-priority",   "10");
-	req.headers:upsert("content-type",    "application/json");
-	req:set_body(body);
 
-	local ok, result = pcall(function()
-		local headers, stream = assert(req:go(10));
-		local status = headers:get(":status");
-		local body = stream:get_body_as_string() or "";
-		return { status = status, body = body };
-	end);
+	local handle = io.popen(cmd);
+	local output = handle:read("*a");
+	handle:close();
 
-	if not ok then
-		module:log("warn", "APNs push failed: %s", tostring(result));
-	elseif result.status ~= "200" then
-		module:log("warn", "APNs returned %s for token %s: %s", result.status, device_token, result.body);
+	local response_body, status = output:match("^(.-)\n(%d+)%s*$");
+	if not status then
+		module:log("warn", "APNs push failed (curl): %s", output);
+	elseif status ~= "200" then
+		module:log("warn", "APNs returned %s for token %s: %s", status, device_token, response_body or "");
 	else
 		module:log("info", "APNs push sent to %s", device_token);
 	end
