@@ -10,7 +10,9 @@ RUN sed -i \
       luarocks libssl-dev build-essential m4 && \
     luarocks install luaossl && \
     luarocks install http && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    ln -s /usr/local/lib/lua/5.1 /usr/local/lib/lua/5.2 && \
+    ln -s /usr/local/share/lua/5.1 /usr/local/share/lua/5.2
 
 COPY prosody.cfg.lua /etc/prosody/prosody.cfg.lua
 COPY mod_voip_push.lua /usr/lib/prosody/modules/mod_voip_push.lua
