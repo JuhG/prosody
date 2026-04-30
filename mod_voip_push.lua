@@ -25,6 +25,7 @@ end
 
 local apns_key = assert(pkey.new(APNS_KEY_PEM));
 local token_store = module:open_store("voip_tokens");
+module:log("info", "mod_voip_push loaded, APNs team=%s key=%s bundle=%s", APNS_TEAM_ID, APNS_KEY_ID, APNS_BUNDLE_ID);
 
 local function base64url(s)
 	return (b64.encode(s):gsub("+", "-"):gsub("/", "_"):gsub("=+$", ""));
@@ -135,11 +136,22 @@ module:hook("iq/full", function(event)
 	if not jingle or jingle.attr.action ~= "session-initiate" then return; end
 
 	local to_user = jid.split(stanza.attr.to);
-	if hosts[module.host].sessions[to_user] then return; end
+	module:log("info", "Jingle session-initiate from %s to %s", stanza.attr.from, stanza.attr.to);
 
+	local sessions = hosts[module.host].sessions[to_user];
+	if sessions then
+		module:log("info", "User %s is online, skipping push", to_user);
+		return;
+	end
+
+	module:log("info", "User %s is offline, looking up VoIP token", to_user);
 	local data = token_store:get(to_user);
-	if not data then return; end
+	if not data then
+		module:log("warn", "No VoIP token stored for %s", to_user);
+		return;
+	end
 
+	module:log("info", "Sending VoIP push to %s (token: %s...)", to_user, data.token:sub(1, 8));
 	send_push(
 		data.token,
 		jingle.attr.sid,
