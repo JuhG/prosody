@@ -1,7 +1,8 @@
-local jid  = require "util.jid";
-local json = require "util.json";
-local st   = require "util.stanza";
-local b64  = require "util.base64";
+local jid       = require "util.jid";
+local json      = require "util.json";
+local st        = require "util.stanza";
+local encodings = require "util.encodings";
+local b64       = encodings.base64;
 
 local ok_pkey,   pkey           = pcall(require, "openssl.pkey");
 local ok_digest, openssl_digest = pcall(require, "openssl.digest");
@@ -100,14 +101,16 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 	local ok, result = pcall(function()
 		local headers, stream = assert(req:go(10));
 		local status = headers:get(":status");
-		stream:finish();
-		return status;
+		local body = stream:get_body_as_string() or "";
+		return { status = status, body = body };
 	end);
 
 	if not ok then
 		module:log("warn", "APNs push failed: %s", tostring(result));
-	elseif result ~= "200" then
-		module:log("warn", "APNs returned %s for token %s", result, device_token);
+	elseif result.status ~= "200" then
+		module:log("warn", "APNs returned %s for token %s: %s", result.status, device_token, result.body);
+	else
+		module:log("info", "APNs push sent to %s", device_token);
 	end
 end
 
@@ -119,6 +122,7 @@ module:hook("iq-set/self/urn:messagely:v4:notifications:register-voip-token:quer
 		return true;
 	end
 	token_store:set(origin.username, { token = token });
+	module:log("info", "VoIP token registered for %s", origin.username);
 	origin.send(st.reply(stanza));
 	return true;
 end);
