@@ -115,10 +115,14 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 	end
 end
 
-module:hook("iq-set/self/urn:messagely:v4:notifications:register-voip-token:query", function(event)
+local VOIP_NS = "urn:messagely:v4:notifications:register-voip-token";
+
+module:hook("iq-set/self/" .. VOIP_NS .. ":query", function(event)
 	local origin, stanza = event.origin, event.stanza;
-	local token = stanza:find("query/token#");
+	local token = stanza:find("{" .. VOIP_NS .. "}query/token#")
+		or stanza:find("{" .. VOIP_NS .. "}query/{" .. VOIP_NS .. "}token#");
 	if not token then
+		module:log("warn", "Missing token in VoIP registration IQ: %s", tostring(stanza));
 		origin.send(st.error_reply(stanza, "modify", "bad-request", "Missing token"));
 		return true;
 	end
