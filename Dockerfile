@@ -7,7 +7,7 @@ RUN sed -i \
       /etc/apt/sources.list && \
     sed -i '/buster-updates/d' /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
-      luarocks libssl-dev build-essential && \
+      luarocks libssl-dev build-essential m4 && \
     luarocks install luaossl && \
     luarocks install http && \
     rm -rf /var/lib/apt/lists/*
