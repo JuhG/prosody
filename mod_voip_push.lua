@@ -128,7 +128,7 @@ module:hook("iq-set/self/urn:messagely:v4:notifications:register-voip-token:quer
 	return true;
 end);
 
-module:hook("iq/full", function(event)
+local function handle_jingle_initiate(event)
 	local stanza = event.stanza;
 	if stanza.attr.type ~= "set" then return; end
 
@@ -158,4 +158,7 @@ module:hook("iq/full", function(event)
 		stanza.attr.from,
 		jid.split(stanza.attr.from)
 	);
-end, 1);
+end
+
+module:hook("iq/full", handle_jingle_initiate, 1);
+module:hook("iq/bare", handle_jingle_initiate, 1);
