@@ -17,7 +17,12 @@ RUN sed -i \
 
 COPY prosody.cfg.lua /etc/prosody/prosody.cfg.lua
 COPY mod_voip_push.lua /usr/lib/prosody/modules/mod_voip_push.lua
+COPY mod_report_log.lua /usr/lib/prosody/modules/mod_report_log.lua
 COPY www/ /var/www/prosody/
+
+# Abuse-report log file (XEP-0377). Pre-create so prosody user can write.
+RUN mkdir -p /var/log/prosody && touch /var/log/prosody/abuse-reports.jsonl \
+    && chown -R prosody:prosody /var/log/prosody
 
 COPY entrypoint-fly.sh /entrypoint-fly.sh
 RUN chmod +x /entrypoint-fly.sh

@@ -19,6 +19,7 @@ modules_enabled = {
     -- User management
     "register";         -- In-Band Registration (XEP-0077)
     "blocklist";        -- Simple Communications Blocking (XEP-0191)
+    "report_log";       -- Logs XEP-0377 abuse reports embedded in block stanzas
 
     -- Advanced features
     "pep";              -- Personal Eventing Protocol (XEP-0163)
