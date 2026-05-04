@@ -3,9 +3,9 @@
 -- Logs XEP-0377 (Spam Reporting) <report/> elements in two forms:
 --   1. embedded inside XEP-0191 (Simple Communications Blocking) <block/> IQs
 --   2. standalone, sent as a <message> stanza addressed to the offender
--- Does NOT consume the event — block IQs still flow to mod_blocklist, and
--- standalone report messages are still routed normally (or dropped if the
--- recipient has no interest).
+-- Block IQs continue to mod_blocklist (no consumption). Standalone report
+-- messages ARE consumed after logging — otherwise the offender's client
+-- would receive the report stanza, which leaks the reporter's identity.
 --
 -- Output goes to prosody's standard log (level "warn" so it stands out) plus
 -- an append-only JSON-lines file at /var/log/prosody/abuse-reports.jsonl.
@@ -91,10 +91,11 @@ local function log_message_report(event)
 		"abuse-report (standalone) reporter=%s target=%s reason=%s stanza_id=%s",
 		entry.reporter, entry.target, entry.reason, entry.stanza_id or "-");
 	append_log(entry);
+	-- Consume the stanza: don't route the report to the offender.
+	return true;
 end
 
--- Catch standalone report <message> stanzas before routing. Priority high so
--- we log even if the message ends up dropped/bounced.
+-- Catch standalone report <message> stanzas before routing.
 module:hook("pre-message/bare", log_message_report, 100);
 module:hook("pre-message/full", log_message_report, 100);
 
