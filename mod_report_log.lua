@@ -1,8 +1,11 @@
 -- mod_report_log
 --
--- Logs XEP-0377 (Spam Reporting) <report/> elements that are embedded inside
--- XEP-0191 (Simple Communications Blocking) <block/> requests. Does NOT
--- consume the event — mod_blocklist still processes the block normally.
+-- Logs XEP-0377 (Spam Reporting) <report/> elements in two forms:
+--   1. embedded inside XEP-0191 (Simple Communications Blocking) <block/> IQs
+--   2. standalone, sent as a <message> stanza addressed to the offender
+-- Does NOT consume the event — block IQs still flow to mod_blocklist, and
+-- standalone report messages are still routed normally (or dropped if the
+-- recipient has no interest).
 --
 -- Output goes to prosody's standard log (level "warn" so it stands out) plus
 -- an append-only JSON-lines file at /var/log/prosody/abuse-reports.jsonl.
@@ -61,5 +64,38 @@ module:hook("iq-set/self/" .. BLOCKING_NS .. ":block", function(event)
 	end
 	-- intentionally no return — let mod_blocklist handle the block
 end, 100); -- priority 100 = runs before mod_blocklist (default 0)
+
+local function log_message_report(event)
+	local origin, stanza = event.origin, event.stanza;
+	local report = stanza:get_child("report", REPORTING_NS);
+	if not report then return; end
+
+	local reporter = origin.full_jid or (origin.username and origin.host and (origin.username .. "@" .. origin.host)) or tostring(stanza.attr.from);
+	local target = stanza.attr.to;
+	local reason = reason_short(report.attr.reason);
+	local text_node = report:get_child("text");
+	local text = text_node and text_node:get_text() or nil;
+	local stanza_id_node = report:get_child("stanza-id", "urn:xmpp:sid:0");
+	local stanza_id = stanza_id_node and stanza_id_node.attr.id or nil;
+
+	local entry = {
+		ts = datetime.datetime(),
+		reporter = reporter,
+		target = target,
+		reason = reason,
+		text = text,
+		stanza_id = stanza_id,
+	};
+
+	module:log("warn",
+		"abuse-report (standalone) reporter=%s target=%s reason=%s stanza_id=%s",
+		entry.reporter, entry.target, entry.reason, entry.stanza_id or "-");
+	append_log(entry);
+end
+
+-- Catch standalone report <message> stanzas before routing. Priority high so
+-- we log even if the message ends up dropped/bounced.
+module:hook("pre-message/bare", log_message_report, 100);
+module:hook("pre-message/full", log_message_report, 100);
 
 module:log("info", "mod_report_log loaded, writing to %s", LOG_PATH);
