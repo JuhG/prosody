@@ -81,7 +81,7 @@ local function shell_escape(s)
 	return "'" .. s:gsub("'", "'\\''") .. "'";
 end
 
-local function send_push(device_token, call_id, caller_jid, caller_name)
+local function send_push(device_token, sandbox, call_id, caller_jid, caller_name)
 	local payload = json.encode({
 		aps      = {},
 		callType = "xmpp",
@@ -91,11 +91,16 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 	});
 
 	local jwt = make_jwt();
-	local apns_host = os.getenv("APNS_SANDBOX") and "api.sandbox.push.apple.com" or "api.push.apple.com";
+	local apns_host = sandbox and "api.sandbox.push.apple.com" or "api.push.apple.com";
 	local url = "https://" .. apns_host .. "/3/device/" .. device_token;
+	local token_prefix = device_token:sub(1, 8);
 
+	-- -i includes response headers in stdout so we can extract apns-id;
+	-- -w appends a marker line with the HTTP status. On connect failure curl
+	-- still prints the marker with status=000. The body, when present, is the
+	-- JSON error doc from APNs (e.g. {"reason":"BadDeviceToken"}).
 	local cmd = string.format(
-		"curl -s -w '\\n%%{http_code}' --http2 -X POST"
+		"curl -s -i -w '\\n__STATUS__:%%{http_code}' --http2 -X POST"
 		.. " -H 'authorization: bearer %s'"
 		.. " -H 'apns-topic: %s.voip'"
 		.. " -H 'apns-push-type: voip'"
@@ -110,13 +115,21 @@ local function send_push(device_token, call_id, caller_jid, caller_name)
 	local output = handle:read("*a");
 	handle:close();
 
-	local response_body, status = output:match("^(.-)\n(%d+)%s*$");
-	if not status then
-		module:log("warn", "APNs push failed (curl): %s", output);
+	local status  = output:match("__STATUS__:(%d+)");
+	local apns_id = output:match("[Aa]pns%-[Ii]d:%s*([^\r\n]+)");
+	-- Body is between the blank line after headers and our __STATUS__ marker.
+	local body    = output:match("\r?\n\r?\n(.-)\n__STATUS__:") or "";
+	local reason  = body:match('"reason"%s*:%s*"([^"]+)"');
+
+	if not status or status == "000" then
+		module:log("warn", "APNs push failed: host=%s token=%s… status=%s output=%s",
+			apns_host, token_prefix, status or "none", output);
 	elseif status ~= "200" then
-		module:log("warn", "APNs returned %s for token %s: %s", status, device_token, response_body or "");
+		module:log("warn", "APNs %s: host=%s token=%s… apns-id=%s reason=%s body=%s",
+			status, apns_host, token_prefix, apns_id or "?", reason or "?", body);
 	else
-		module:log("info", "APNs push sent to %s", device_token);
+		module:log("info", "APNs push sent: host=%s token=%s… apns-id=%s",
+			apns_host, token_prefix, apns_id or "?");
 	end
 end
 
@@ -124,15 +137,29 @@ local VOIP_NS = "urn:messagely:v4:notifications:register-voip-token";
 
 module:hook("iq-set/self/" .. VOIP_NS .. ":query", function(event)
 	local origin, stanza = event.origin, event.stanza;
-	local token = stanza:find("{" .. VOIP_NS .. "}query/token#")
-		or stanza:find("{" .. VOIP_NS .. "}query/{" .. VOIP_NS .. "}token#");
-	if not token then
+	local query = stanza:find("{" .. VOIP_NS .. "}query");
+
+	-- <remove/> child clears any stored token (sent on logout).
+	if query and (query:get_child("remove") or query:get_child("remove", VOIP_NS)) then
+		token_store:set(origin.username, nil);
+		module:log("info", "VoIP token cleared for %s", origin.username);
+		origin.send(st.reply(stanza));
+		return true;
+	end
+
+	local token_el = query and (query:get_child("token") or query:get_child("token", VOIP_NS));
+	local token = token_el and token_el:get_text();
+	if not token or token == "" then
 		module:log("warn", "Missing token in VoIP registration IQ: %s", tostring(stanza));
 		origin.send(st.error_reply(stanza, "modify", "bad-request", "Missing token"));
 		return true;
 	end
-	token_store:set(origin.username, { token = token });
-	module:log("info", "VoIP token registered for %s", origin.username);
+
+	-- env="sandbox" → APNs sandbox host; anything else (or missing) → production.
+	local env = token_el.attr.env;
+	local sandbox = (env == "sandbox");
+	token_store:set(origin.username, { token = token, sandbox = sandbox });
+	module:log("info", "VoIP token registered for %s (env=%s)", origin.username, env or "production");
 	origin.send(st.reply(stanza));
 	return true;
 end);
@@ -160,9 +187,11 @@ local function handle_jingle_initiate(event)
 		return;
 	end
 
-	module:log("info", "Sending VoIP push to %s (token: %s...)", to_user, data.token:sub(1, 8));
+	module:log("info", "Sending VoIP push to %s (token: %s..., sandbox=%s)",
+		to_user, data.token:sub(1, 8), tostring(data.sandbox or false));
 	send_push(
 		data.token,
+		data.sandbox or false,
 		jingle.attr.sid,
 		stanza.attr.from,
 		jid.split(stanza.attr.from)
@@ -171,3 +200,44 @@ end
 
 module:hook("iq/full", handle_jingle_initiate, 1);
 module:hook("iq/bare", handle_jingle_initiate, 1);
+
+-- An IQ to a bare JID with an unknown payload is normally answered by the
+-- server with <service-unavailable/> (RFC 6121 §8.5.2.1.1) — it is NOT fanned
+-- out to the user's connected resources. That breaks calls when the caller
+-- has no presence info for the callee and addresses session-initiate to bare.
+-- Fan it out ourselves: clone the stanza to each online resource and reply OK
+-- to the caller so the default service-unavailable doesn't fire.
+local function fan_out_jingle_to_resources(event)
+	local stanza = event.stanza;
+	if stanza.attr.type ~= "set" then return; end
+
+	local jingle = stanza:find("{urn:xmpp:jingle:1}jingle");
+	if not jingle or jingle.attr.action ~= "session-initiate" then return; end
+
+	local to_user = jid.split(stanza.attr.to);
+	local user = hosts[module.host].sessions[to_user];
+	if not user or not user.sessions then return; end
+
+	local routed = 0;
+	for _, session in pairs(user.sessions) do
+		if session.full_jid then
+			local copy = st.clone(stanza);
+			copy.attr.to = session.full_jid;
+			module:send(copy);
+			routed = routed + 1;
+		end
+	end
+
+	if routed == 0 then return; end
+
+	module:log("info", "Fanned out Jingle session-initiate from %s to %d resource(s) of %s",
+		stanza.attr.from, routed, to_user);
+	-- No explicit reply: the callee clients ack the routed IQ themselves
+	-- (jingleManager.handleStanza always sends buildIQResult). Returning true
+	-- halts processing so Prosody doesn't add a service-unavailable response.
+	return true;
+end
+
+-- Priority 5 runs before the offline-push handler (priority 1) and before
+-- Prosody's default service-unavailable response.
+module:hook("iq/bare", fan_out_jingle_to_resources, 5);
