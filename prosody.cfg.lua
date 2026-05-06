@@ -97,13 +97,45 @@ http_paths = {
     files = "/";
 }
 
--- STUN server for VoIP call setup (XEP-0215)
--- No TURN: if P2P fails, clients show an error
+-- ICE servers for VoIP call setup (XEP-0215)
+-- STUN for NAT traversal, TURN as relay fallback when P2P fails (e.g. symmetric NAT on mobile)
 external_services = {
     {
         type = "stun",
-        host = "stun.l.google.com",
-        port = 19302,
+        host = "stun.relay.metered.ca",
+        port = 80,
+    },
+    {
+        type = "turn",
+        host = "global.relay.metered.ca",
+        port = 80,
+        username = "c8faed0af41292bde84e755f",
+        password = "0htRLrz3UfVuZLLg",
+        transport = "udp",
+    },
+    {
+        type = "turn",
+        host = "global.relay.metered.ca",
+        port = 80,
+        username = "c8faed0af41292bde84e755f",
+        password = "0htRLrz3UfVuZLLg",
+        transport = "tcp",
+    },
+    {
+        type = "turn",
+        host = "global.relay.metered.ca",
+        port = 443,
+        username = "c8faed0af41292bde84e755f",
+        password = "0htRLrz3UfVuZLLg",
+        transport = "udp",
+    },
+    {
+        type = "turns",
+        host = "global.relay.metered.ca",
+        port = 443,
+        username = "c8faed0af41292bde84e755f",
+        password = "0htRLrz3UfVuZLLg",
+        transport = "tcp",
     },
 }
 
