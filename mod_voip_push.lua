@@ -179,6 +179,14 @@ module:hook("iq-set/self/" .. VOIP_NS .. ":query", function(event)
 	return true;
 end);
 
+-- Buffered session-initiate stanzas keyed by callee username. When the callee
+-- is offline we send a VoIP push and stash the original IQ here; when the
+-- callee's app launches and sends initial presence, we replay it routed to the
+-- new full JID. Without this the callee auto-accepts via CallKit but never
+-- receives the offer, so the call hangs on "Connecting…".
+local pending_initiates = {};
+local PENDING_TTL = 30;
+
 local function handle_jingle_initiate(event)
 	local stanza = event.stanza;
 	if stanza.attr.type ~= "set" then return; end
@@ -190,31 +198,88 @@ local function handle_jingle_initiate(event)
 	module:log("info", "Jingle session-initiate from %s to %s", stanza.attr.from, stanza.attr.to);
 
 	local sessions = hosts[module.host].sessions[to_user];
-	if sessions then
-		module:log("info", "User %s is online, skipping push", to_user);
-		return;
-	end
-
-	module:log("info", "User %s is offline, looking up VoIP token", to_user);
 	local data = token_store:get(to_user);
-	if not data then
-		module:log("warn", "No VoIP token stored for %s", to_user);
-		return;
+
+	-- Always push when a token is registered, regardless of whether the user
+	-- appears online. A stale "online" session (e.g. a zombie c2s after the
+	-- real device killed the app) would otherwise mask the fact that the
+	-- actual device needs to be woken via PushKit. The client decides what to
+	-- do with the push: launch CallKit if the app was killed, or ignore it if
+	-- the in-app UI is already handling the call from the routed XMPP IQ.
+	if data then
+		pending_initiates[to_user] = {
+			stanza  = st.clone(stanza),
+			expires = os.time() + PENDING_TTL,
+		};
+		module:log("info", "Sending VoIP push to %s (token: %s..., sandbox=%s, online=%s)",
+			to_user, data.token:sub(1, 8), tostring(data.sandbox or false), tostring(sessions ~= nil));
+		send_push(
+			data.token,
+			data.sandbox or false,
+			jingle.attr.sid,
+			stanza.attr.from,
+			jid.split(stanza.attr.from)
+		);
+	elseif not sessions then
+		module:log("warn", "No VoIP token stored for %s and user has no online sessions", to_user);
 	end
 
-	module:log("info", "Sending VoIP push to %s (token: %s..., sandbox=%s)",
-		to_user, data.token:sub(1, 8), tostring(data.sandbox or false));
-	send_push(
-		data.token,
-		data.sandbox or false,
-		jingle.attr.sid,
-		stanza.attr.from,
-		jid.split(stanza.attr.from)
-	);
+	-- If the user has online sessions, fall through so default routing (or the
+	-- bare-JID fan-out hook) delivers the IQ via XMPP. Only halt when we
+	-- actually have nothing to route to — otherwise Prosody would reply
+	-- service-unavailable to the caller.
+	if sessions then
+		return;
+	end
+	return true;
 end
 
 module:hook("iq/full", handle_jingle_initiate, 1);
 module:hook("iq/bare", handle_jingle_initiate, 1);
+
+-- Replay buffered session-initiate when the callee's app comes online and
+-- sends its initial presence. Routed to the resource that just bound — that's
+-- the device the user just woke up via the VoIP push.
+module:hook("presence/initial", function(event)
+	local session = event.origin;
+	local user = session and session.username;
+	if not user then return; end
+
+	local pending = pending_initiates[user];
+	if not pending then return; end
+	pending_initiates[user] = nil;
+
+	if os.time() > pending.expires then
+		module:log("info", "Buffered Jingle session-initiate for %s expired, dropping", user);
+		return;
+	end
+
+	local copy = st.clone(pending.stanza);
+	copy.attr.to = session.full_jid;
+	module:send(copy);
+	module:log("info", "Replayed buffered Jingle session-initiate to %s", session.full_jid);
+end);
+
+-- If the caller cancels (sends session-terminate) while the buffered initiate
+-- is still pending, drop the buffer so a stale offer doesn't pop up later when
+-- the callee finally comes online.
+local function drop_buffered_on_terminate(event)
+	local stanza = event.stanza;
+	if stanza.attr.type ~= "set" then return; end
+
+	local jingle = stanza:find("{urn:xmpp:jingle:1}jingle");
+	if not jingle or jingle.attr.action ~= "session-terminate" then return; end
+
+	local to_user = jid.split(stanza.attr.to);
+	local pending = pending_initiates[to_user];
+	if pending and pending.stanza:find("{urn:xmpp:jingle:1}jingle").attr.sid == jingle.attr.sid then
+		pending_initiates[to_user] = nil;
+		module:log("info", "Dropped buffered Jingle session-initiate for %s (caller cancelled)", to_user);
+	end
+end
+
+module:hook("iq/full", drop_buffered_on_terminate, 1);
+module:hook("iq/bare", drop_buffered_on_terminate, 1);
 
 -- An IQ to a bare JID with an unknown payload is normally answered by the
 -- server with <service-unavailable/> (RFC 6121 §8.5.2.1.1) — it is NOT fanned
