@@ -12,19 +12,23 @@ if not (ok_pkey and ok_digest) then
 	return;
 end
 
-local APNS_KEY_PEM   = os.getenv("APNS_KEY");
-local APNS_KEY_ID    = os.getenv("APNS_KEY_ID");
-local APNS_TEAM_ID   = os.getenv("APNS_TEAM_ID");
-local APNS_BUNDLE_ID = os.getenv("APNS_BUNDLE_ID");
+local APNS_KEY_PEM        = os.getenv("APNS_KEY");
+local APNS_KEY_ID         = os.getenv("APNS_KEY_ID");
+local APNS_KEY_PEM_SBX    = os.getenv("APNS_KEY_SANDBOX");
+local APNS_KEY_ID_SBX     = os.getenv("APNS_KEY_ID_SANDBOX");
+local APNS_TEAM_ID        = os.getenv("APNS_TEAM_ID");
+local APNS_BUNDLE_ID      = os.getenv("APNS_BUNDLE_ID");
 
 if not (APNS_KEY_PEM and APNS_KEY_ID and APNS_TEAM_ID and APNS_BUNDLE_ID) then
 	module:log("error", "Missing APNS_KEY / APNS_KEY_ID / APNS_TEAM_ID / APNS_BUNDLE_ID env vars");
 	return;
 end
 
-local apns_key = assert(pkey.new(APNS_KEY_PEM));
-local token_store = module:open_store("voip_tokens");
-module:log("info", "mod_voip_push loaded, APNs team=%s key=%s bundle=%s", APNS_TEAM_ID, APNS_KEY_ID, APNS_BUNDLE_ID);
+local apns_key_prod = assert(pkey.new(APNS_KEY_PEM));
+local apns_key_sbx  = (APNS_KEY_PEM_SBX and APNS_KEY_ID_SBX) and pkey.new(APNS_KEY_PEM_SBX) or nil;
+local token_store   = module:open_store("voip_tokens");
+module:log("info", "mod_voip_push loaded, APNs team=%s prod_key=%s sandbox_key=%s bundle=%s",
+	APNS_TEAM_ID, APNS_KEY_ID, APNS_KEY_ID_SBX or "(using prod key)", APNS_BUNDLE_ID);
 
 local function base64url(s)
 	return (b64.encode(s):gsub("+", "-"):gsub("/", "_"):gsub("=+$", ""));
@@ -58,23 +62,34 @@ local function der_to_raw(der)
 	return r .. s;
 end
 
--- APNs JWTs are valid for 1 hour; cache to avoid signing on every push
-local jwt_cache, jwt_cached_at;
+-- APNs JWTs are valid for 1 hour; cache per key to avoid signing on every push
+local jwt_cache_prod, jwt_cached_at_prod;
+local jwt_cache_sbx,  jwt_cached_at_sbx;
 local JWT_TTL = 55 * 60;
 
-local function make_jwt()
-	local now = os.time();
-	if jwt_cache and (now - jwt_cached_at) < JWT_TTL then
-		return jwt_cache;
+local function make_jwt(sandbox)
+	local now    = os.time();
+	local cache  = sandbox and jwt_cache_sbx  or jwt_cache_prod;
+	local cached = sandbox and jwt_cached_at_sbx or jwt_cached_at_prod;
+	if cache and (now - cached) < JWT_TTL then
+		return cache;
 	end
-	local hdr = base64url(json.encode({ alg = "ES256", kid = APNS_KEY_ID }));
+	local key_id  = (sandbox and APNS_KEY_ID_SBX) or APNS_KEY_ID;
+	local key_obj = (sandbox and apns_key_sbx)     or apns_key_prod;
+	local hdr = base64url(json.encode({ alg = "ES256", kid = key_id }));
 	local pld = base64url(json.encode({ iss = APNS_TEAM_ID, iat = now }));
 	local msg = hdr .. "." .. pld;
 	local d   = openssl_digest.new("sha256");
 	d:update(msg);
-	jwt_cache    = msg .. "." .. base64url(der_to_raw(apns_key:sign(d)));
-	jwt_cached_at = now;
-	return jwt_cache;
+	local jwt = msg .. "." .. base64url(der_to_raw(key_obj:sign(d)));
+	if sandbox then
+		jwt_cache_sbx      = jwt;
+		jwt_cached_at_sbx  = now;
+	else
+		jwt_cache_prod     = jwt;
+		jwt_cached_at_prod = now;
+	end
+	return jwt;
 end
 
 local function shell_escape(s)
@@ -90,7 +105,7 @@ local function send_push(device_token, sandbox, call_id, caller_jid, caller_name
 		peerName = caller_name,
 	});
 
-	local jwt = make_jwt();
+	local jwt = make_jwt(sandbox);
 	local apns_host = sandbox and "api.sandbox.push.apple.com" or "api.push.apple.com";
 	local url = "https://" .. apns_host .. "/3/device/" .. device_token;
 	local token_prefix = device_token:sub(1, 8);
