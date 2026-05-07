@@ -96,6 +96,15 @@ local function shell_escape(s)
 	return "'" .. s:gsub("'", "'\\''") .. "'";
 end
 
+-- Push payload contract (consumed by iOS CallKitProvider → XmppCallKitProvider
+-- → web jingleManager):
+--   callType = "xmpp"   (selector for the XMPP CallKit branch on iOS)
+--   callId   = Jingle session id (sid attribute of <jingle/>)
+--   peerJid  = caller's BARE JID (`user@host`); never include a resource. Web
+--              treats this as the peer's stable identity — full JID would leak
+--              into UI state and cause routing mismatches on terminate.
+--   peerName = caller's username (the local part of the bare JID), used for
+--              CallKit's localizedCallerName and the in-app modal heading.
 local function send_push(device_token, sandbox, call_id, caller_jid, caller_name)
 	local payload = json.encode({
 		aps      = {},
@@ -217,7 +226,7 @@ local function handle_jingle_initiate(event)
 			data.token,
 			data.sandbox or false,
 			jingle.attr.sid,
-			stanza.attr.from,
+			jid.bare(stanza.attr.from),
 			jid.split(stanza.attr.from)
 		);
 	elseif not sessions then
