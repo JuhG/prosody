@@ -217,7 +217,7 @@ local function handle_jingle_initiate(event)
 			data.token,
 			data.sandbox or false,
 			jingle.attr.sid,
-			stanza.attr.from,
+			jid.bare(stanza.attr.from),
 			jid.split(stanza.attr.from)
 		);
 	elseif not sessions then
