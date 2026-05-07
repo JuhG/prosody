@@ -99,7 +99,7 @@ end
 -- Push payload contract (consumed by iOS CallKitProvider → XmppCallKitProvider
 -- → web jingleManager):
 --   callType = "xmpp"   (selector for the XMPP CallKit branch on iOS)
---   callId   = Jingle session id (sid attribute of <jingle/>)
+--   callId   = call session id (sid attribute of the offer <signal/>)
 --   peerJid  = caller's BARE JID (`user@host`); never include a resource. Web
 --              treats this as the peer's stable identity — full JID would leak
 --              into UI state and cause routing mismatches on terminate.
@@ -196,15 +196,37 @@ end);
 local pending_initiates = {};
 local PENDING_TTL = 30;
 
-local function handle_jingle_initiate(event)
+-- Dedupe pushes by (callee, sid). The same session-initiate can reach this
+-- module twice in normal operation: once via iq/bare (caller addressed bare
+-- JID, fan-out hook clones to each resource) and again via iq/full when the
+-- cloned stanza re-enters routing. Both would otherwise emit a push and the
+-- callee's iOS would receive two VoIP pushes → two CallKit entries → user
+-- ends one, the other rings until iOS times it out.
+local recent_pushes = {};
+local PUSH_DEDUPE_TTL = 10;
+
+local function should_push(to_user, sid)
+	local key = to_user .. "::" .. sid;
+	local now = os.time();
+	for k, exp in pairs(recent_pushes) do
+		if exp < now then recent_pushes[k] = nil; end
+	end
+	if recent_pushes[key] then return false; end
+	recent_pushes[key] = now + PUSH_DEDUPE_TTL;
+	return true;
+end
+
+local SIGNAL_NS = "urn:messagely:v1:webrtc-signal";
+
+local function handle_offer_signal(event)
 	local stanza = event.stanza;
 	if stanza.attr.type ~= "set" then return; end
 
-	local jingle = stanza:find("{urn:xmpp:jingle:1}jingle");
-	if not jingle or jingle.attr.action ~= "session-initiate" then return; end
+	local signal = stanza:find("{" .. SIGNAL_NS .. "}signal");
+	if not signal or signal.attr.kind ~= "offer" then return; end
 
 	local to_user = jid.split(stanza.attr.to);
-	module:log("info", "Jingle session-initiate from %s to %s", stanza.attr.from, stanza.attr.to);
+	module:log("info", "WebRTC offer from %s to %s", stanza.attr.from, stanza.attr.to);
 
 	local sessions = hosts[module.host].sessions[to_user];
 	local data = token_store:get(to_user);
@@ -215,7 +237,7 @@ local function handle_jingle_initiate(event)
 	-- actual device needs to be woken via PushKit. The client decides what to
 	-- do with the push: launch CallKit if the app was killed, or ignore it if
 	-- the in-app UI is already handling the call from the routed XMPP IQ.
-	if data then
+	if data and should_push(to_user, signal.attr.sid) then
 		pending_initiates[to_user] = {
 			stanza  = st.clone(stanza),
 			expires = os.time() + PENDING_TTL,
@@ -225,10 +247,12 @@ local function handle_jingle_initiate(event)
 		send_push(
 			data.token,
 			data.sandbox or false,
-			jingle.attr.sid,
+			signal.attr.sid,
 			jid.bare(stanza.attr.from),
 			jid.split(stanza.attr.from)
 		);
+	elseif data then
+		module:log("info", "Skipping duplicate VoIP push for %s sid=%s", to_user, signal.attr.sid);
 	elseif not sessions then
 		module:log("warn", "No VoIP token stored for %s and user has no online sessions", to_user);
 	end
@@ -243,12 +267,12 @@ local function handle_jingle_initiate(event)
 	return true;
 end
 
-module:hook("iq/full", handle_jingle_initiate, 1);
-module:hook("iq/bare", handle_jingle_initiate, 1);
+module:hook("iq/full", handle_offer_signal, 1);
+module:hook("iq/bare", handle_offer_signal, 1);
 
--- Replay buffered session-initiate when the callee's app comes online and
--- sends its initial presence. Routed to the resource that just bound — that's
--- the device the user just woke up via the VoIP push.
+-- Replay buffered offer signal when the callee's app comes online and sends
+-- its initial presence. Routed to the resource that just bound — that's the
+-- device the user just woke up via the VoIP push.
 module:hook("presence/initial", function(event)
 	local session = event.origin;
 	local user = session and session.username;
@@ -259,49 +283,57 @@ module:hook("presence/initial", function(event)
 	pending_initiates[user] = nil;
 
 	if os.time() > pending.expires then
-		module:log("info", "Buffered Jingle session-initiate for %s expired, dropping", user);
+		module:log("info", "Buffered offer signal for %s expired, dropping", user);
 		return;
 	end
 
 	local copy = st.clone(pending.stanza);
 	copy.attr.to = session.full_jid;
 	module:send(copy);
-	module:log("info", "Replayed buffered Jingle session-initiate to %s", session.full_jid);
+	module:log("info", "Replayed buffered offer signal to %s", session.full_jid);
 end);
 
--- If the caller cancels (sends session-terminate) while the buffered initiate
--- is still pending, drop the buffer so a stale offer doesn't pop up later when
--- the callee finally comes online.
-local function drop_buffered_on_terminate(event)
+-- If the caller cancels (sends end signal) while the buffered offer is still
+-- pending, drop the buffer so a stale offer doesn't pop up later when the
+-- callee finally comes online.
+local function drop_buffered_on_end(event)
 	local stanza = event.stanza;
 	if stanza.attr.type ~= "set" then return; end
 
-	local jingle = stanza:find("{urn:xmpp:jingle:1}jingle");
-	if not jingle or jingle.attr.action ~= "session-terminate" then return; end
+	local signal = stanza:find("{" .. SIGNAL_NS .. "}signal");
+	if not signal or signal.attr.kind ~= "end" then return; end
 
 	local to_user = jid.split(stanza.attr.to);
 	local pending = pending_initiates[to_user];
-	if pending and pending.stanza:find("{urn:xmpp:jingle:1}jingle").attr.sid == jingle.attr.sid then
+	if pending and pending.stanza:find("{" .. SIGNAL_NS .. "}signal").attr.sid == signal.attr.sid then
 		pending_initiates[to_user] = nil;
-		module:log("info", "Dropped buffered Jingle session-initiate for %s (caller cancelled)", to_user);
+		module:log("info", "Dropped buffered offer signal for %s (caller cancelled)", to_user);
 	end
 end
 
-module:hook("iq/full", drop_buffered_on_terminate, 1);
-module:hook("iq/bare", drop_buffered_on_terminate, 1);
+module:hook("iq/full", drop_buffered_on_end, 1);
+module:hook("iq/bare", drop_buffered_on_end, 1);
 
 -- An IQ to a bare JID with an unknown payload is normally answered by the
 -- server with <service-unavailable/> (RFC 6121 §8.5.2.1.1) — it is NOT fanned
 -- out to the user's connected resources. That breaks calls when the caller
--- has no presence info for the callee and addresses session-initiate to bare.
--- Fan it out ourselves: clone the stanza to each online resource and reply OK
--- to the caller so the default service-unavailable doesn't fire.
-local function fan_out_jingle_to_resources(event)
+-- has no presence info for the callee and addresses a signal to bare. Fan
+-- offer/end signals out ourselves: clone the stanza to each online resource
+-- and reply OK to the caller so the default service-unavailable doesn't
+-- fire. Two kinds need this:
+--   - "offer": caller may genuinely not know the callee's resource yet.
+--   - "end":   caller cancelling an outgoing call before any answer locked
+--             a peerFullJid. Without bare-JID fan-out for end, online
+--             callees would only learn the call was cancelled via an
+--             eventual ICE failure — slow and leaves CallKit ringing.
+local function fan_out_signal_to_resources(event)
 	local stanza = event.stanza;
 	if stanza.attr.type ~= "set" then return; end
 
-	local jingle = stanza:find("{urn:xmpp:jingle:1}jingle");
-	if not jingle or jingle.attr.action ~= "session-initiate" then return; end
+	local signal = stanza:find("{" .. SIGNAL_NS .. "}signal");
+	if not signal then return; end
+	local kind = signal.attr.kind;
+	if kind ~= "offer" and kind ~= "end" then return; end
 
 	local to_user = jid.split(stanza.attr.to);
 	local user = hosts[module.host].sessions[to_user];
@@ -319,14 +351,14 @@ local function fan_out_jingle_to_resources(event)
 
 	if routed == 0 then return; end
 
-	module:log("info", "Fanned out Jingle session-initiate from %s to %d resource(s) of %s",
-		stanza.attr.from, routed, to_user);
+	module:log("info", "Fanned out %s signal from %s to %d resource(s) of %s",
+		kind, stanza.attr.from, routed, to_user);
 	-- No explicit reply: the callee clients ack the routed IQ themselves
-	-- (jingleManager.handleStanza always sends buildIQResult). Returning true
+	-- (voipManager.handleStanza always sends buildIqResult). Returning true
 	-- halts processing so Prosody doesn't add a service-unavailable response.
 	return true;
 end
 
 -- Priority 5 runs before the offline-push handler (priority 1) and before
 -- Prosody's default service-unavailable response.
-module:hook("iq/bare", fan_out_jingle_to_resources, 5);
+module:hook("iq/bare", fan_out_signal_to_resources, 5);
